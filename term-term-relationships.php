@@ -37,33 +37,114 @@ class Term_Term_Relationship {
 	public function __construct( $taxonomy ) {
 		$this->target_taxonomy = $taxonomy;
 
-		add_action("{$this->target_taxonomy}_add_form_fields", array( $this, 'taxonomy_add_form_fields' ) );  // form for adding terms  /wp-admin/edit-tags.php?taxonomy=taxonomy
-		add_action("{$this->target_taxonomy}_edit_form_fields", array( $this, 'taxonomy_edit_form_fields' ) ); // form for editing terms  /wp-admin/edit-tags.php?action=edit&taxonomy=taxonomy&tag_ID=12345&post_type=post
-		add_action("create_term", array( $this, 'create_term' ), 10, 3 ); // happens after form is submitted
-		add_action("edit_term", array( $this, 'edit_term' ), 10, 3 ); // happens after form is submitted
-		add_filter("get_{$this->target_taxonomy}", array( $this, 'get_taxonomy' ), 10, 2 ); // when a single term is requested
+		add_action( 'init',                                      array( $this, 'init' ) );
+		add_action( "{$this->target_taxonomy}_add_form_fields",  array( $this, 'taxonomy_add_form_fields' ) );  // form for adding terms  /wp-admin/edit-tags.php?taxonomy=taxonomy
+		add_action( "{$this->target_taxonomy}_edit_form_fields", array( $this, 'taxonomy_edit_form_fields' ) ); // form for editing terms  /wp-admin/edit-tags.php?action=edit&taxonomy=taxonomy&tag_ID=12345&post_type=post
+		add_action( "create_term",                               array( $this, 'create_term' ), 10, 3 );        // happens after form is submitted
+		add_action( "edit_term",                                 array( $this, 'edit_term' ), 10, 3 );          // happens after form is submitted
+
+		add_filter( "get_{$this->target_taxonomy}", array( $this, 'get_taxonomy' ), 10, 2 ); // when a single term is requested
+		add_filter( 'pre_get_posts',                array( $this, 'pre_get_posts' ) );       // Filter tax queries to return canonical tags
 	}
 
 	function init() {
 		$args = array(
-			'label' => "{$this->target_taxonomy}_related",
-			'hierarchical' => false, // not sure on this yet :)
-			'rewrite' => false,
-			'public' => false,
-			'show_ui' => false,
+			'label'             => "{$this->target_taxonomy}{$this->related_suffix}",
+			'hierarchical'      => true, // This is required to do queries based on parent/child relationships.
+			'rewrite'           => false,
+			'public'            => false,
+			'show_ui'           => false,
 			'show_in_nav_menus' => false,
-			'show_tagcloud' => false
+			'show_tagcloud'     => false
 		);
 
 		register_taxonomy( $args['label'], 'post', $args ); //attaching to post so that it will exist but over-riding that behavior later
 	}
 
-	/*
+	/**
 	 * Find every instance where our target taxonomy shows up in a query and make sure we are
 	 * searching for the correct terms by converting incorrect forms to their correct synonym.
+	 *
+	 * @param WP_Query $query
+	 *
+	 * @return WP_Query
 	 */
-	function pre_get_posts() {
-		
+	function pre_get_posts( &$query ) {
+		$process = false;
+		if ( 'category' == $this->target_taxonomy && $query->is_category() ) {
+			$category = $query->get_queried_object();
+
+			$query->set( 'category_name', '' );
+			$query->set( 'cat', '' );
+			$query->set( 'category__in', $this->get_term_family( $category->term_id ) );
+		} else if ( 'post_tag' == $this->target_taxonomy && $query->is_tag() ) {
+			$tag = $query->get_queried_object();
+
+			$query->set( 'tag', '' );
+			$query->set( 'tag_id', '' );
+			$query->set( 'tag__in', $this->get_term_family( $tag->term_id ) );
+		} else if ( $query->is_tax( $this->target_taxonomy ) ) {
+
+		}
+
+		return $query;
+	}
+
+	/**
+	 * Get an array of terms related to the specified term.
+	 *
+	 * This function will walk up the relationship tree until it finds a parent term (a term where the term_id is the
+	 * same as its parent's term_id).  It will then gather all children of that parent term  and return an array of IDs
+	 * for the entire family.
+	 *
+	 * Example, if your structure is:
+	 * ---------------------------------
+	 * | term_id | term_name | parent  |
+	 * ---------------------------------
+	 * |    5    |   Apple   |    5    |
+	 * |   12    |   apple   |    5    |
+	 * |   23    | apple-inc |    5    |
+	 * ---------------------------------
+	 *
+	 * get_term_family( 5 ) => array( 5, 12, 23 )
+	 * get_term_family( 12 ) => array( 5, 12, 23 )
+	 * get_term_family( 23 ) => array( 5, 12, 23 )
+	 *
+	 * @param int $term_id ID of the term for which to parse and return a family.
+	 *
+	 * @return array
+	 */
+	function get_term_family( $term_id ) {
+		$terms = array();
+
+		// Get the original term
+		$term = get_term( $term_id, $this->target_taxonomy );
+
+		// Get its relationships
+		$related = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
+
+		// If the term is not a parent, use its parent to get related terms
+		if ( $term->term_id != $related->parent ) {
+			return $this->get_term_family( $related->parent );
+		}
+
+		// We know the term is a parent, so include it in the final array.
+		$terms[] = $term_id;
+
+		// Get all children of that term
+		$children = get_terms(
+			$this->target_taxonomy . $this->related_suffix,
+			array(
+			     'parent'     => '',
+			     'child_of'   => intval( $term_id ),
+			     'hide_empty' => false,
+			     'fields'     => 'ids'
+			)
+		);
+
+		$terms = array_merge( $terms, $children );
+
+		return $terms;
 	}
 
 	/*
