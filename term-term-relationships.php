@@ -226,13 +226,14 @@ class Term_Term_Relationship {
 	function edit_term( $term_id, $tt_id, $taxonomy ) {
 		if ( $taxonomy != $this->target_taxonomy || ! isset( $_POST['relativetype'] ) )
 			return;
-		
+
 		// default parent for the shadow_term we are creating is the same term but in the target taxonomy
 		$args['parent'] = $term_id;
 
 		// unless we over-ride that with the correctform field
 		if ( 'synonym' == $_POST['relativetype'] && isset( $_POST['correctform'] ) ) {
-			$correctform = get_term_by( 'name', sanitize_text_field( $_POST['correctform'] ), $this->target_taxonomy . $this->related_suffix );
+			// Reason for pointing back to target tax is that this is never more than one layer deep and makes querying faster.
+			$correctform = get_term_by( 'name', sanitize_text_field( $_POST['correctform'] ), $this->target_taxonomy );
 			if ( isset( $correctform->term_id ) )
 				$args['parent'] = $correctform->term_id;
 		}
@@ -242,13 +243,13 @@ class Term_Term_Relationship {
 			wp_update_term( $shadow_term->term_id, $this->target_taxonomy . $this->related_suffix, $args );
 		else
 			return;
-var_dump( get_term( $shadow_term ) );
+
 		// now set up related terms if provided
 		if ( 'related' == $_POST['relativetype'] && isset( $_POST['relatedterms'] ) ) {
 			$relatedterms = explode( ',', $_POST['relatedterms'] );
-			$relatedterms = array_walk( $relatedterms, array( $this, 'get_shadow_term' ) );
-			wp_set_object_terms( $related_shadow->term_id, $relatedterms, $this->target_taxonomy );
-var_dump( wp_get_object_terms( $related_shadow->term_id, $this->target_taxonomy ) );
+			//$relatedterms = array_walk( $relatedterms, array( $this, 'get_shadow_term' ) );
+			wp_set_object_terms( $shadow_term->term_id, $relatedterms, $this->target_taxonomy . $this->related_suffix );
+var_dump( wp_get_object_terms( $shadow_term->term_id, $this->target_taxonomy . $this->related_suffix ) );
 		}
 
 		//apps, ecommerce, Education
@@ -266,11 +267,14 @@ var_dump( wp_get_object_terms( $related_shadow->term_id, $this->target_taxonomy 
 			if ( is_int( $term ) ) :
 				$term = get_term( $term, $this->target_taxonomy );
 			elseif ( is_string( $term ) ) :
-				/* if we are passed a string there is a chance that the term just doesn't exist yet
-				 * wp_insert_term only inserts the term if it doesn't exist
-				 */
-				wp_insert_term( sanitize_text_field( $term ), $this->target_taxonomy );
-				$term = get_term_by( 'name', $term, $this->target_taxonomy );
+				$_term = get_term_by( 'name', sanitize_text_field( $term ), $this->target_taxonomy );
+				if ( isset( $_term->name ) ) :
+					$term = $_term;
+				else :
+					$_term = wp_insert_term( sanitize_text_field( $term ), $this->target_taxonomy );
+					if ( isset ( $_term['term_id'] ) )
+						$term = get_term( $_term['term_id'], $this->target_taxonomy);
+				endif;
 			endif;
 
 			// if still nothing give up
@@ -278,14 +282,22 @@ var_dump( wp_get_object_terms( $related_shadow->term_id, $this->target_taxonomy 
 				return false;
 		}
 
-		// will only create term if it doesn't already exist
-		wp_insert_term( $term->name, $this->target_taxonomy . $this->related_suffix );
-
-		// finally get the shadow term
+		// see if the shadow already exists
 		$shadow_term = get_term_by( 'name', $term->name, $this->target_taxonomy . $this->related_suffix );
 
-		// return our match or false if nothing found
-		return ( is_wp_error( $shadow_term ) || 0 == $shadow_term ) ? false : $shadow_term;
+		// if not let's try to insert the term and set shadow to it
+		if ( ! isset( $shadow_term->name ) ) {
+			$_term = wp_insert_term( sanitize_text_field( $term->name ), $this->target_taxonomy . $this->related_suffix );
+			if ( isset ( $_term['term_id'] ) )
+				$shadow_term = get_term( $_term['term_id'], $this->target_taxonomy . $this->related_suffix );
+		}
+		
+		// last chance if we failed to create even a shadow, we die a horrible death
+		if ( ! isset( $shadow_term->name ) )
+			return false;
+		
+		// looks like we made it - let's stand tall and cast that shadow
+		return $shadow_term;
 	}
 
 	/*
