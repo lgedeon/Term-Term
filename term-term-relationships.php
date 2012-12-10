@@ -38,12 +38,12 @@ class Term_Term_Relationship {
 		$this->target_taxonomy = $taxonomy;
 
 		add_action( 'init',                                      array( $this, 'init' ) );
-		add_action( "{$this->target_taxonomy}_add_form_fields",  array( $this, 'taxonomy_add_form_fields' ) );  // form for adding terms  /wp-admin/edit-tags.php?taxonomy=taxonomy
-		add_action( "{$this->target_taxonomy}_edit_form_fields", array( $this, 'taxonomy_edit_form_fields' ) ); // form for editing terms  /wp-admin/edit-tags.php?action=edit&taxonomy=taxonomy&tag_ID=12345&post_type=post
-		add_action( "create_term",                               array( $this, 'create_term' ), 10, 3 );        // happens after form is submitted
-		add_action( "edit_term",                                 array( $this, 'edit_term' ), 10, 3 );          // happens after form is submitted
+		add_action( "{$this->target_taxonomy}_add_form_fields",  array( $this, 'taxonomy_add_form_fields' ), 10, 1 );  // form for adding terms  /wp-admin/edit-tags.php?taxonomy=taxonomy
+		add_action( "{$this->target_taxonomy}_edit_form_fields", array( $this, 'taxonomy_edit_form_fields' ), 10, 2 ); // form for editing terms  /wp-admin/edit-tags.php?action=edit&taxonomy=taxonomy&tag_ID=12345&post_type=post
+		add_action( "created_{$this->target_taxonomy}",          array( $this, 'edited_term_in_taxonomy' ), 10, 2 );   // happens after form is submitted, new term data is in db, and cache is refreshed
+		add_action( "edited_{$this->target_taxonomy}",           array( $this, 'edited_term_in_taxonomy' ), 10, 2 );   // same as created but for updating
 
-		add_filter( "get_{$this->target_taxonomy}", array( $this, 'get_taxonomy' ), 10, 2 ); // when a single term is requested
+		add_filter( "get_{$this->target_taxonomy}", array( $this, 'get_term_in_taxonomy' ), 10, 2 ); // when a single term is requested in our taret taxonomy
 		add_filter( 'pre_get_posts',                array( $this, 'pre_get_posts' ) );       // Filter tax queries to return canonical tags
 	}
 
@@ -154,13 +154,13 @@ class Term_Term_Relationship {
 	 * 
 	 * todo: add JS to hide old parent selector and either correctform or relatedterms
 	 */
-	function taxonomy_add_form_fields() {
+	function taxonomy_add_form_fields( $taxonomy ) {
 		?>
 		<div class="form-field">
 			Related Terms
 			<p>
 				<label for="synonym"><input type="radio" name="relativetype" id="synonym" value="synonym" style="width: 20px;">This is a variant, non-preferred spelling of a different term.</label>
-				<label for="related"><input type="radio" name="relativetype" id="related" value="related" style="width: 20px;">This is the preferred spelling/form for this term.</label>
+				<label for="related"><input type="radio" name="relativetype" id="related" value="related" style="width: 20px;" checked>This is the preferred spelling/form for this term.</label>
 			</p>
 		</div>
 		<div class="form-field">
@@ -175,136 +175,112 @@ class Term_Term_Relationship {
 		</div>
 		<?php
 	}
-	function taxonomy_edit_form_fields() {
+	function taxonomy_edit_form_fields( $term, $taxonomy ) {
+		$shadow_term = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
+		if ( isset( $shadow_term->parent ) && 0 != $shadow_term->parent )
+			$correctform = get_term_field( 'name', $shadow_term->parent, $this->target_taxonomy );
+		else
+			$correctform = '';
+
+		$related_terms = wp_get_object_terms( $term->term_id, $this->target_taxonomy . $this->related_suffix );
+		$related_terms = implode( ', ', wp_list_pluck( $related_terms, 'name' ) );
+
 		?>
 		<tr class="form-field">
 			<th scope="row" valign="top">Related Terms</th>
 			<td>
-				<label for="synonym"><input type="radio" name="relativetype" id="synonym" value="synonym" style="width: 20px;">This is a variant, non-preferred spelling of a different term.</label><br>
-				<label for="related"><input type="radio" name="relativetype" id="related" value="related" style="width: 20px;">This is the preferred spelling/form for this term.</label>
+				<label for="synonym"><input type="radio" name="relativetype" id="synonym" value="synonym" style="width: 20px;" <?php checked( '' != $correctform ) ?>>This is a variant, non-preferred spelling of a different term.</label><br>
+				<label for="related"><input type="radio" name="relativetype" id="related" value="related" style="width: 20px;" <?php checked( '' == $correctform ) ?>>This is the preferred spelling/form for this term.</label>
 			</td>
 		</tr>
 		<tr class="form-field">
 			<th scope="row" valign="top"><label for="correctform">Correct form/spelling of term</label></th>
-			<td><input name="correctform" id="correctform" type="text" value="" size="40" />
+			<td><input name="correctform" id="correctform" type="text" value="<?php echo $correctform; ?>" size="40" />
 			<p class="description">Enter correct spelling, capitalization, punctuation, etc. for this term. Then if someone uses the value in the name field above as a <?php echo $this->target_taxonomy; ?>, it will be corrected to this value.</p></td>
 		</tr>
 		<tr class="form-field">
 			<th scope="row" valign="top"><label for="relatedterms">Parent terms</label></th>
-			<td><input name="relatedterms" id="relatedterms" type="text" value="" size="80" />
+			<td><input name="relatedterms" id="relatedterms" type="text" value="<?php echo $related_terms; ?>" size="80" />
 			<p class="description">Enter a comma separated list of terms that could be considered parents of this term. You might have a Big Band <?php echo $this->target_taxonomy; ?> that is a child of the Jazz, Instrumental, and Swing <?php echo $this->target_taxonomy; //todo get plural form ?>s.</p></td>
 		</tr>
 		<?php
 	}
 
 	/*
-	 * Gets called any time a term is created. Make sure we are working on the correct $taxonomy.
+	 * Gets called any time a term is created or edited in our target taxonomy.
+	 * 
 	 * The values for the fields added by this plugin *may* be in $_POST, but terms can be
 	 * added, and this action called, in several places we don't touch - for example post
 	 * imports or xmlrpc.
-	 * replace parent selector (if it exists) with a radio option to specify whether this is
+	 * 
+	 * Replaces parent selector (if it exists) with a radio option to specify whether this is
 	 *  an incorrect spelling of: correct term
-	 *  a child of: multiple terms
-	 * May seperate functionality for hier vs non-hier. Hierarchical may not need multi-parent.
-	 */
-	function create_term( $term_id, $tt_id, $taxonomy ) {
-
-	}
-
-	/*
-	 * Same as create_term, just occuring on editing an existing term. Not sure yet if these
-	 * need to be seperate.
+	 *  a child of: related terms
+	 * 
+	 * todo: Hierarchical may not need multi-parent. Possibly make optional.
 	 * 
 	 * term - the term in the real world (target_tax) that we are editing 
-	 * shadow_term - the matching term in our _related tax - parent is term if this is a
-	 * correct form or an alternate term from target-tax if not. Related terms are defined
-	 * as this shadow pointing to shadows of other terms.
+	 * correct form - another term in the taxonomy that this term should be replaced with
+	 * related terms are defined using a shadow pointing to shadows of other terms.
 	 * 
 	 * Note: WP up to 3.5 allows parents to be in a different taxonomy. If this ever changes
 	 * our implementation may need to change as well.
 	 */
-	function edit_term( $term_id, $tt_id, $taxonomy ) {
-		if ( $taxonomy != $this->target_taxonomy || ! isset( $_POST['relativetype'] ) )
+	function edited_term_in_taxonomy( $term_id, $tt_id ) {
+		if ( ! isset( $_POST['relativetype'] ) )
 			return;
 
-		// default parent for the shadow_term we are creating is the same term but in the target taxonomy
-		$args['parent'] = $term_id;
+		// if we don't have a parent below default to zero - WP doesn't allow pointing back to self
+		$args['parent'] = 0;
 
 		// unless we over-ride that with the correctform field
 		if ( 'synonym' == $_POST['relativetype'] && isset( $_POST['correctform'] ) ) {
-			// Reason for pointing back to target tax is that this is never more than one layer deep and makes querying faster.
+			// Right now we are pointing back to the actual term_id which is shared across taxonomies - may switch to the ttid later
 			$correctform = get_term_by( 'name', sanitize_text_field( $_POST['correctform'] ), $this->target_taxonomy );
 			if ( isset( $correctform->term_id ) )
 				$args['parent'] = $correctform->term_id;
 		}
 
 		// now get the shadow term and point it to it's correct form
-		if ( $shadow_term = $this->get_shadow_term( $term_id ) )
-			wp_update_term( $shadow_term->term_id, $this->target_taxonomy . $this->related_suffix, $args );
-		else
-			return;
+		if ( term_exists( $term_id, $this->target_taxonomy . $this->related_suffix ) ) :
+			wp_update_term( $term_id, $this->target_taxonomy . $this->related_suffix, $args );
+		else :
+			$term = get_term( $term_id, $this->target_taxonomy );
+			wp_insert_term( $term->name, $this->target_taxonomy . $this->related_suffix, $args);
+		endif;
 
 		// now set up related terms if provided
-		if ( 'related' == $_POST['relativetype'] && isset( $_POST['relatedterms'] ) ) {
+		if ( 'related' == $_POST['relativetype'] && isset( $_POST['relatedterms'] ) ) :
 			$relatedterms = explode( ',', $_POST['relatedterms'] );
-			//$relatedterms = array_walk( $relatedterms, array( $this, 'get_shadow_term' ) );
-			wp_set_object_terms( $shadow_term->term_id, $relatedterms, $this->target_taxonomy . $this->related_suffix );
-var_dump( wp_get_object_terms( $shadow_term->term_id, $this->target_taxonomy . $this->related_suffix ) );
-		}
-
-		//apps, ecommerce, Education
-	}
-
-	/*
-	 * Get the shadow of a term. Create it if it does not exist.
-	 */
-	function get_shadow_term( $term ) {
-
-		// if we did not recieve a term object let's try to get one
-		if ( ! isset( $term->name ) ) {
-
-			// if we are passed an id or term name let's get the term object
-			if ( is_int( $term ) ) :
-				$term = get_term( $term, $this->target_taxonomy );
-			elseif ( is_string( $term ) ) :
-				$_term = get_term_by( 'name', sanitize_text_field( $term ), $this->target_taxonomy );
-				if ( isset( $_term->name ) ) :
-					$term = $_term;
-				else :
-					$_term = wp_insert_term( sanitize_text_field( $term ), $this->target_taxonomy );
-					if ( isset ( $_term['term_id'] ) )
-						$term = get_term( $_term['term_id'], $this->target_taxonomy);
-				endif;
-			endif;
-
-			// if still nothing give up
-			if ( ! isset( $term->name ) )
-				return false;
-		}
-
-		// see if the shadow already exists
-		$shadow_term = get_term_by( 'name', $term->name, $this->target_taxonomy . $this->related_suffix );
-
-		// if not let's try to insert the term and set shadow to it
-		if ( ! isset( $shadow_term->name ) ) {
-			$_term = wp_insert_term( sanitize_text_field( $term->name ), $this->target_taxonomy . $this->related_suffix );
-			if ( isset ( $_term['term_id'] ) )
-				$shadow_term = get_term( $_term['term_id'], $this->target_taxonomy . $this->related_suffix );
-		}
+			$relatedterms = array_map( 'sanitize_text_field', $relatedterms );
+		else :
+			$relatedterms = array();
+		endif;
 		
-		// last chance if we failed to create even a shadow, we die a horrible death
-		if ( ! isset( $shadow_term->name ) )
-			return false;
-		
-		// looks like we made it - let's stand tall and cast that shadow
-		return $shadow_term;
+		wp_set_object_terms( $term_id, $relatedterms, $this->target_taxonomy . $this->related_suffix );
+
 	}
 
 	/*
 	 * When a term in our target taxonomy is requested and it happens to be an incorrect form,
 	 * let's return the correct form.
 	 */
-	function get_taxonomy( $term, $taxonomy ) {
+	function get_term_in_taxonomy( $term, $taxonomy ) {
+		if ( $this->no_recurse )
+			return term;
+
+		$shadow_term = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
+
+		$this->no_recurse = true;
+
+		if ( isset( $shadow_term->parent ) && 0 != $shadow_term->parent )
+			$correctform = get_term( $shadow_term->parent, $this->target_taxonomy );
+
+		$this->no_recurse = false;
+
+		if ( isset( $correctform->name ) )
+			return $correctform;
+
 		return $term;
 	}
 
