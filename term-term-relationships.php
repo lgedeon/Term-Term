@@ -165,7 +165,7 @@ class Term_Term_Relationship {
 		<div class="form-field">
 			<label for="correctform">Correct form/spelling of term</label>
 			<input name="correctform" id="correctform" type="text" value="" size="40" />
-			<p class="description">Enter correct spelling, capitalization, punctuation, etc. for this term. Then if someone uses the value in the name field above as a <?php echo $this->target_taxonomy; ?>, it will be corrected to this value.</p>
+			<p class="description">Enter correct spelling, capitalization, punctuation, etc. for this term. Then if someone uses the value in the name field above as a <?php echo $this->target_taxonomy; ?>, it will be corrected to this value. Note: If the term entered is itself pointing to another term, the second term will be used instead.</p>
 		</div>
 		<div class="form-field">
 			<label for="relatedterms">Parent terms</label>
@@ -195,7 +195,7 @@ class Term_Term_Relationship {
 		<tr class="form-field">
 			<th scope="row" valign="top"><label for="correctform">Correct form/spelling of term</label></th>
 			<td><input name="correctform" id="correctform" type="text" value="<?php echo $correctform; ?>" size="40" />
-			<p class="description">Enter correct spelling, capitalization, punctuation, etc. for this term. Then if someone uses the value in the name field above as a <?php echo $this->target_taxonomy; ?>, it will be corrected to this value.</p></td>
+			<p class="description">Enter correct spelling, capitalization, punctuation, etc. for this term. Then if someone uses the value in the name field above as a <?php echo $this->target_taxonomy; ?>, it will be corrected to this value. Note: If the term entered is itself pointing to another term, the second term will be used instead.</p></td>
 		</tr>
 		<tr class="form-field">
 			<th scope="row" valign="top"><label for="relatedterms">Parent terms</label></th>
@@ -235,9 +235,20 @@ class Term_Term_Relationship {
 		// unless we over-ride that with the correctform field
 		if ( 'synonym' == $_POST['relativetype'] && isset( $_POST['correctform'] ) ) {
 			// Right now we are pointing back to the actual term_id which is shared across taxonomies - may switch to the ttid later
-			$correctform = get_term_by( 'name', sanitize_text_field( $_POST['correctform'] ), $this->target_taxonomy );
+			$correctform = get_term_by( 'name', sanitize_text_field( $_POST['correctform'] ), $this->target_taxonomy . $this->related_suffix );
+			while ( isset( $correctform->parent ) && 0 != $correctform->parent ) :
+				$lastknown_id = $correctform->term_id;
+				$correctform = get_term( $correctform->parent, $this->target_taxonomy . $this->related_suffix );
+			endwhile;
+			
+			// Let's see if the final term is a term object. If not, we may have gone too far.
 			if ( isset( $correctform->term_id ) )
 				$args['parent'] = $correctform->term_id;
+			elseif ( 0 != $lastknown_id )
+				$args['parent'] = $lastknown_id;
+			// if we never had a good value leave parent=0
+
+			// todo: find all the children and inform them of their new parent
 		}
 
 		// now get the shadow term and point it to it's correct form
