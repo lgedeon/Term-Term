@@ -33,7 +33,7 @@ class Term_Term_Relationship {
 	var $target_taxonomy = '',
 		$related_suffix = '_related';
 	
-	// Check for live_cache_check on init. If set return cached value
+	// Check for live_cache_check on init. If set, return cached value.
 	public function __construct( $taxonomy ) {
 		$this->target_taxonomy = $taxonomy;
 
@@ -43,7 +43,6 @@ class Term_Term_Relationship {
 		add_action( "created_{$this->target_taxonomy}",          array( $this, 'edited_term_in_taxonomy' ), 10, 2 );   // happens after form is submitted, new term data is in db, and cache is refreshed
 		add_action( "edited_{$this->target_taxonomy}",           array( $this, 'edited_term_in_taxonomy' ), 10, 2 );   // same as created but for updating
 
-		add_filter( "get_{$this->target_taxonomy}", array( $this, 'get_term_in_taxonomy' ), 10, 2 ); // when a single term is requested in our taret taxonomy
 		add_filter( 'pre_get_posts',                array( $this, 'pre_get_posts' ) );       // Filter tax queries to return canonical tags
 	}
 
@@ -261,28 +260,6 @@ class Term_Term_Relationship {
 
 	}
 
-	/*
-	 * When a term in our target taxonomy is requested and it happens to be an incorrect form,
-	 * let's return the correct form.
-	 */
-	function get_term_in_taxonomy( $term, $taxonomy ) {
-		if ( $this->no_recurse )
-			return term;
-
-		$shadow_term = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
-
-		$this->no_recurse = true;
-
-		if ( isset( $shadow_term->parent ) && 0 != $shadow_term->parent )
-			$correctform = get_term( $shadow_term->parent, $this->target_taxonomy );
-
-		$this->no_recurse = false;
-
-		if ( isset( $correctform->name ) )
-			return $correctform;
-
-		return $term;
-	}
 
 	/*
 	 * Accepts one or an array of terms as integers or term objects.
