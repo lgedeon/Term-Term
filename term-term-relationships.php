@@ -43,7 +43,8 @@ class Term_Term_Relationship {
 		add_action( "created_{$this->target_taxonomy}",          array( $this, 'edited_term_in_taxonomy' ), 10, 2 );   // happens after form is submitted, new term data is in db, and cache is refreshed
 		add_action( "edited_{$this->target_taxonomy}",           array( $this, 'edited_term_in_taxonomy' ), 10, 2 );   // same as created but for updating
 
-		add_filter( 'pre_get_posts',                array( $this, 'pre_get_posts' ) );       // Filter tax queries to return canonical tags
+		add_filter( 'pre_get_posts',                array( $this, 'pre_get_posts' ) );        // Filter tax queries to return canonical tags
+		add_filter( 'get_the_terms',                array( $this, 'get_the_terms' ), 10, 3 ); // Filter taxonomy lists from the front-end
 	}
 
 	function init() {
@@ -83,7 +84,7 @@ class Term_Term_Relationship {
 			$query->set( 'tag_id', '' );
 			$query->set( 'tag__in', $this->get_term_family( $tag->term_id ) );
 		} else if ( $query->is_tax( $this->target_taxonomy ) ) {
-
+			// Todo: Handle generic taxonomies
 		}
 
 		return $query;
@@ -123,7 +124,7 @@ class Term_Term_Relationship {
 		$related = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
 
 		// If the term is not a parent, use its parent to get related terms
-		if ( $term->term_id != $related->parent ) {
+		if ( isset( $related ) && ! is_wp_error( $related ) && $term->term_id != $related->parent ) {
 			return $this->get_term_family( $related->parent );
 		}
 
@@ -142,6 +143,73 @@ class Term_Term_Relationship {
 		);
 
 		$terms = array_merge( $terms, $children );
+
+		return $terms;
+	}
+
+	/**
+	 * Get the absolute parent of a given term in the taxonomy.
+	 *
+	 * This function will walk up the relationship tree until it finds a parent term (a term where the term_id is the
+	 * same as its parent's term_id).
+	 *
+	 * @param int $term_id
+	 *
+	 * @return mixed|null|WP_Error
+	 */
+	function get_term_ancestor( $term_id ) {
+		// Get the original term
+		$term = get_term( $term_id, $this->target_taxonomy );
+
+		// Get its relationships
+		$related = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
+
+		// If the term is not a parent, use its parent to get related terms
+		if ( isset( $related ) && ! is_wp_error( $related ) && $term->term_id != $related->parent ) {
+			return $this->get_term_ancestor( $related->parent );
+		}
+
+		return $related;
+	}
+
+	/**
+	 * Filter lists of taxonomy terms to only show parent terms.
+	 *
+	 * Iterates through the terms of a post to detect which ones are parents and which are children.  Child terms will
+	 * automatically be replaced by their parents.
+	 *
+	 * @param array  $terms
+	 * @param int    $post_id
+	 * @param string $taxonomy
+	 *
+	 * @return array
+	 */
+	function get_the_terms( $terms, $post_id, $taxonomy ) {
+		// If we're on the back end, exit.
+		if ( is_admin() ) {
+			return $terms;
+		}
+
+		// If there was an error and we have no terms, exit.
+		if ( false === $terms ) {
+			return $terms;
+		}
+
+		// If we're not filtering the target taxonomy, exit.
+		if ( $this->target_taxonomy != $taxonomy ) {
+			return $terms;
+		}
+
+		$queried = $terms;
+		$terms = array();
+
+		// Get the parent of each term
+		foreach( $queried as $term ) {
+			// Get its relationships
+			$parent = $this->get_term_ancestor( $term->term_id );
+
+			$terms[ $parent->term_id ] = $parent;
+		}
 
 		return $terms;
 	}
