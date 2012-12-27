@@ -200,18 +200,23 @@ class Term_Term_Relationship {
 			return $terms;
 		}
 
-		$queried = $terms;
-		$terms = array();
+		$filtered_terms = wp_cache_get( $post_id, "term-term_$taxonomy" );
 
-		// Get the parent of each term
-		foreach( $queried as $term ) {
-			// Get its relationships
-			$parent = $this->get_term_ancestor( $term->term_id );
+		if ( false === $filtered_terms ) {
+			$filtered_terms = array();
 
-			$terms[ $parent->term_id ] = $parent;
+			// Get the parent of each term
+			foreach( $terms as $term ) {
+				// Get its relationships
+				$parent = $this->get_term_ancestor( $term->term_id );
+
+				$filtered_terms[ $parent->term_id ] = $parent;
+			}
+
+			wp_cache_set( $post_id, $filtered_terms, "term-term_$taxonomy" );
 		}
 
-		return $terms;
+		return $filtered_terms;
 	}
 
 	/*
