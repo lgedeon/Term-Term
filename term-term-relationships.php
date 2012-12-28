@@ -152,6 +152,7 @@ class Term_Term_Relationship {
 	 *
 	 * This function will walk up the relationship tree until it finds a parent term (a term where the term_id is the
 	 * same as its parent's term_id).
+Note to Eric: I had to set parent to zero for top level instead of to itself.
 	 *
 	 * @param int $term_id
 	 *
@@ -212,6 +213,8 @@ class Term_Term_Relationship {
 
 				$filtered_terms[ $parent->term_id ] = $parent;
 			}
+			
+			// todo: remove duplicates in $filtered_terms
 
 			wp_cache_set( $post_id, $filtered_terms, "term-term_$taxonomy" );
 		}
@@ -225,6 +228,7 @@ class Term_Term_Relationship {
 	 * Seperate functions for add vs. edit, since layout is significatly different.
 	 * 
 	 * todo: add JS to hide old parent selector and either correctform or relatedterms
+	 * todo: add auto-complete so that only non-incorrect forms can be selected as correct forms
 	 */
 	function taxonomy_add_form_fields( $taxonomy ) {
 		?>
@@ -302,7 +306,7 @@ class Term_Term_Relationship {
 		if ( ! isset( $_POST['relativetype'] ) )
 			return;
 
-		// if we don't have a parent below default to zero - WP doesn't allow pointing back to self
+		// if we don't have a parent below, default to zero - WP doesn't allow pointing back to self as we had originally intended
 		$args['parent'] = 0;
 
 		// unless we over-ride that with the correctform field
@@ -321,21 +325,38 @@ class Term_Term_Relationship {
 				$args['parent'] = $lastknown_id;
 			// if we never had a good value leave parent=0
 
-			// todo: find all the children and inform them of their new parent
+			// Get all children of our term if it had any.
+			$children = get_terms(
+				$this->target_taxonomy . $this->related_suffix,
+				array(
+					'parent'     => '',
+					'child_of'   => intval( $term_id ),
+					'hide_empty' => false,
+					'fields'     => 'ids'
+				)
+			);
+
+			// add original term to the array
+			$children[] = $term_id;
+
+			// now set each child to the new parent value
+			foreach ( $children as $child ) :
+				// if the child exists in the related taxonomy, update its parent else we need to create an entry for it
+				if ( term_exists( $child, $this->target_taxonomy . $this->related_suffix ) ) :
+					wp_update_term( $child, $this->target_taxonomy . $this->related_suffix, $args );
+				else :
+					$term = get_term( $child, $this->target_taxonomy );
+					wp_insert_term( $term->name, $this->target_taxonomy . $this->related_suffix, $args);
+				endif;
+			endforeach;
 		}
 
-		// now get the shadow term and point it to it's correct form
-		if ( term_exists( $term_id, $this->target_taxonomy . $this->related_suffix ) ) :
-			wp_update_term( $term_id, $this->target_taxonomy . $this->related_suffix, $args );
-		else :
-			$term = get_term( $term_id, $this->target_taxonomy );
-			wp_insert_term( $term->name, $this->target_taxonomy . $this->related_suffix, $args);
-		endif;
 
-		// now set up related terms if provided
+		// if we are defining related terms instead of correct forms, let's handle that now.
 		if ( 'related' == $_POST['relativetype'] && isset( $_POST['relatedterms'] ) ) :
 			$relatedterms = explode( ',', $_POST['relatedterms'] );
 			$relatedterms = array_map( 'sanitize_text_field', $relatedterms );
+		// if we are not not doing related or none are provided, we need to clear any that may have already been there.
 		else :
 			$relatedterms = array();
 		endif;
