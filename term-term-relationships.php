@@ -166,11 +166,12 @@ Note to Eric: I had to set parent to zero for top level instead of to itself.
 		$related = get_term( $term->term_id, $this->target_taxonomy . $this->related_suffix );
 
 		// If the term is not a parent, use its parent to get related terms
-		if ( isset( $related ) && ! is_wp_error( $related ) && $term->term_id != $related->parent ) {
+		if ( is_object( $related ) && ! is_wp_error( $related ) && 0 != $related->parent ) {
 			return $this->get_term_ancestor( $related->parent );
 		}
 
-		return $related;
+		// If no related term was found return the original.
+		return ( $related ) ?: $term;
 	}
 
 	/**
